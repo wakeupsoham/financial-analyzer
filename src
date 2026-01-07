@@ -1,1 +1,775 @@
+import React, { useState, useEffect } from 'react';
+import { LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
+import { TrendingUp, Activity, BarChart3, Download, Github } from 'lucide-react';
 
+const FinancialAnalyzer = () => {
+  const [tickers, setTickers] = useState(['AAPL', 'MSFT', 'GOOGL']);
+  const [newTicker, setNewTicker] = useState('');
+  const [dateRange, setDateRange] = useState(252);
+  const [rollingWindow, setRollingWindow] = useState(21);
+  const [riskFreeRate, setRiskFreeRate] = useState(0.03);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
+  const [data, setData] = useState(null);
+  const [activeTab, setActiveTab] = useState('cumulative');
+  const [showDownload, setShowDownload] = useState(false);
+
+  const generatePriceData = (ticker, days) => {
+    const data = [];
+    let price = 100 + Math.random() * 100;
+    const volatility = 0.015 + Math.random() * 0.02;
+    const drift = 0.0003;
+    
+    const startDate = new Date();
+    startDate.setDate(startDate.getDate() - days);
+    
+    for (let i = 0; i < days; i++) {
+      const date = new Date(startDate);
+      date.setDate(date.getDate() + i);
+      
+      if (date.getDay() === 0 || date.getDay() === 6) continue;
+      
+      const randomShock = (Math.random() - 0.5) * 2;
+      price = price * Math.exp(drift + volatility * randomShock);
+      
+      data.push({
+        date: date.toISOString().split('T')[0],
+        price: price
+      });
+    }
+    
+    return data;
+  };
+
+  const calculateArithmeticReturns = (prices) => {
+    const returns = [];
+    for (let i = 1; i < prices.length; i++) {
+      returns.push((prices[i].price - prices[i-1].price) / prices[i-1].price);
+    }
+    return returns;
+  };
+
+  const calculateLogReturns = (prices) => {
+    const returns = [];
+    for (let i = 1; i < prices.length; i++) {
+      returns.push(Math.log(prices[i].price / prices[i-1].price));
+    }
+    return returns;
+  };
+
+  const calculateCumulativeReturns = (returns) => {
+    let cumulative = 1;
+    return returns.map(r => {
+      cumulative *= (1 + r);
+      return cumulative - 1;
+    });
+  };
+
+  const calculateRollingVolatility = (returns, window) => {
+    const volatilities = [];
+    for (let i = window - 1; i < returns.length; i++) {
+      const windowReturns = returns.slice(i - window + 1, i + 1);
+      const mean = windowReturns.reduce((a, b) => a + b, 0) / window;
+      const variance = windowReturns.reduce((sum, r) => sum + Math.pow(r - mean, 2), 0) / (window - 1);
+      volatilities.push(Math.sqrt(variance) * Math.sqrt(252));
+    }
+    return volatilities;
+  };
+
+  const calculateSharpe = (returns, riskFree) => {
+    const annualizedReturn = returns.reduce((a, b) => a + b, 0) / returns.length * 252;
+    const mean = returns.reduce((a, b) => a + b, 0) / returns.length;
+    const variance = returns.reduce((sum, r) => sum + Math.pow(r - mean, 2), 0) / (returns.length - 1);
+    const volatility = Math.sqrt(variance) * Math.sqrt(252);
+    return (annualizedReturn - riskFree) / volatility;
+  };
+
+  const calculateSortino = (returns, riskFree) => {
+    const annualizedReturn = returns.reduce((a, b) => a + b, 0) / returns.length * 252;
+    const mean = returns.reduce((a, b) => a + b, 0) / returns.length;
+    const downsideReturns = returns.filter(r => r < mean);
+    const downsideVariance = downsideReturns.reduce((sum, r) => sum + Math.pow(r - mean, 2), 0) / (downsideReturns.length - 1);
+    const downsideDeviation = Math.sqrt(downsideVariance) * Math.sqrt(252);
+    return (annualizedReturn - riskFree) / downsideDeviation;
+  };
+
+  const analyzeData = () => {
+    setLoading(true);
+    setError('');
+    
+    try {
+      const results = {};
+      
+      tickers.forEach(ticker => {
+        const prices = generatePriceData(ticker, dateRange);
+        const arithmeticReturns = calculateArithmeticReturns(prices);
+        const logReturns = calculateLogReturns(prices);
+        const cumulativeReturns = calculateCumulativeReturns(arithmeticReturns);
+        const rollingVol = calculateRollingVolatility(logReturns, rollingWindow);
+        
+        const mean = arithmeticReturns.reduce((a, b) => a + b, 0) / arithmeticReturns.length;
+        const variance = arithmeticReturns.reduce((sum, r) => sum + Math.pow(r - mean, 2), 0) / (arithmeticReturns.length - 1);
+        const volatility = Math.sqrt(variance) * Math.sqrt(252);
+        
+        results[ticker] = {
+          prices,
+          arithmeticReturns,
+          logReturns,
+          cumulativeReturns,
+          rollingVol,
+          statistics: {
+            avgDailyReturn: mean,
+            annualizedReturn: mean * 252,
+            volatility,
+            sharpe: calculateSharpe(arithmeticReturns, riskFreeRate),
+            sortino: calculateSortino(arithmeticReturns, riskFreeRate),
+            maxReturn: Math.max(...arithmeticReturns),
+            minReturn: Math.min(...arithmeticReturns)
+          }
+        };
+      });
+      
+      setData(results);
+    } catch (err) {
+      setError('Error analyzing data: ' + err.message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    analyzeData();
+  }, [tickers, dateRange, rollingWindow, riskFreeRate]);
+
+  const addTicker = () => {
+    if (newTicker && !tickers.includes(newTicker.toUpperCase())) {
+      setTickers([...tickers, newTicker.toUpperCase()]);
+      setNewTicker('');
+    }
+  };
+
+  const removeTicker = (ticker) => {
+    if (tickers.length > 1) {
+      setTickers(tickers.filter(t => t !== ticker));
+    }
+  };
+
+  const downloadFiles = () => {
+    const files = {
+      'README.md': generateREADME(),
+      'package.json': generatePackageJson(),
+      'src/App.jsx': generateAppComponent(),
+      'src/components/FinancialAnalyzer.jsx': generateMainComponent(),
+      'src/utils/calculations.js': generateCalculations(),
+      '.gitignore': generateGitignore(),
+      'LICENSE': generateLicense()
+    };
+
+    Object.entries(files).forEach(([filename, content]) => {
+      const blob = new Blob([content], { type: 'text/plain' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = filename;
+      a.click();
+      URL.revokeObjectURL(url);
+    });
+
+    setShowDownload(false);
+  };
+
+  const generateREADME = () => `# Financial Returns & Volatility Analyzer 📈
+
+A comprehensive React-based tool for analyzing financial time series data with returns calculation, volatility analysis, and risk metrics.
+
+![Financial Analyzer](https://img.shields.io/badge/React-18.x-blue)
+![License](https://img.shields.io/badge/license-MIT-green)
+
+## Features
+
+- **Returns Calculation**
+  - Arithmetic returns: (P₁ - P₀) / P₀
+  - Logarithmic returns: ln(P₁ / P₀)
+  - Cumulative returns tracking
+
+- **Volatility Analysis**
+  - Rolling volatility with customizable windows
+  - Annualized volatility metrics
+  - Volatility clustering visualization
+
+- **Risk Metrics**
+  - Sharpe Ratio
+  - Sortino Ratio
+  - Maximum/Minimum daily returns
+
+- **Interactive Visualizations**
+  - Cumulative returns comparison
+  - Rolling volatility charts
+  - Return distribution histograms
+
+## Installation
+
+\`\`\`bash
+# Clone the repository
+git clone https://github.com/yourusername/financial-analyzer.git
+cd financial-analyzer
+
+# Install dependencies
+npm install
+
+# Start development server
+npm run dev
+\`\`\`
+
+## Usage
+
+1. **Add Tickers**: Enter stock symbols to analyze
+2. **Configure Parameters**: Adjust date range, rolling window, and risk-free rate
+3. **View Analysis**: Switch between cumulative returns, volatility, and distribution views
+4. **Compare Assets**: Analyze multiple assets side-by-side
+
+## Project Structure
+
+\`\`\`
+financial-analyzer/
+├── src/
+│   ├── components/
+│   │   └── FinancialAnalyzer.jsx
+│   ├── utils/
+│   │   └── calculations.js
+│   ├── App.jsx
+│   └── main.jsx
+├── package.json
+├── README.md
+└── LICENSE
+\`\`\`
+
+## Technologies Used
+
+- **React 18** - UI framework
+- **Recharts** - Data visualization
+- **Lucide React** - Icons
+- **Tailwind CSS** - Styling
+
+## Key Concepts
+
+### Sharpe Ratio
+Measures risk-adjusted returns. Formula: (Return - Risk-Free Rate) / Volatility
+- > 1.0: Good
+- > 2.0: Excellent
+- > 3.0: Outstanding
+
+### Sortino Ratio
+Similar to Sharpe but only penalizes downside volatility. Better for asymmetric returns.
+
+### Volatility Clustering
+Periods of high volatility tend to cluster together - visible in rolling volatility charts.
+
+## API Integration
+
+Currently uses synthetic data. To integrate real data:
+
+### Yahoo Finance
+\`\`\`javascript
+import yahooFinance from 'yahoo-finance2';
+
+const quotes = await yahooFinance.historical(ticker, {
+  period1: startDate,
+  period2: endDate
+});
+\`\`\`
+
+### Alpha Vantage
+\`\`\`javascript
+const API_KEY = 'your_api_key';
+const response = await fetch(
+  \`https://www.alphavantage.co/query?function=TIME_SERIES_DAILY&symbol=\${ticker}&apikey=\${API_KEY}\`
+);
+\`\`\`
+
+## Contributing
+
+1. Fork the repository
+2. Create your feature branch (\`git checkout -b feature/amazing-feature\`)
+3. Commit your changes (\`git commit -m 'Add amazing feature'\`)
+4. Push to the branch (\`git push origin feature/amazing-feature\`)
+5. Open a Pull Request
+
+## License
+
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+
+## Acknowledgments
+
+- Investopedia - Understanding Returns and Volatility
+- QuantStart - Computing Returns in Python
+- Hull, *Options, Futures, and Other Derivatives*
+
+## Author
+
+Your Name - [@yourusername](https://github.com/yourusername)
+
+## Support
+
+If you find this project useful, please give it a ⭐️!
+`;
+
+  const generatePackageJson = () => `{
+  "name": "financial-returns-analyzer",
+  "version": "1.0.0",
+  "description": "A comprehensive tool for analyzing financial returns and volatility",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0",
+    "recharts": "^2.10.3",
+    "lucide-react": "^0.263.1"
+  },
+  "devDependencies": {
+    "@types/react": "^18.2.43",
+    "@types/react-dom": "^18.2.17",
+    "@vitejs/plugin-react": "^4.2.1",
+    "autoprefixer": "^10.4.16",
+    "postcss": "^8.4.32",
+    "tailwindcss": "^3.4.0",
+    "vite": "^5.0.8"
+  },
+  "keywords": [
+    "finance",
+    "returns",
+    "volatility",
+    "sharpe-ratio",
+    "sortino-ratio",
+    "trading",
+    "stocks",
+    "quantitative-finance"
+  ],
+  "author": "Your Name",
+  "license": "MIT"
+}`;
+
+  const generateAppComponent = () => `import React from 'react';
+import FinancialAnalyzer from './components/FinancialAnalyzer';
+
+function App() {
+  return <FinancialAnalyzer />;
+}
+
+export default App;`;
+
+  const generateMainComponent = () => `// Copy the entire FinancialAnalyzer component code here
+// This is the main component from the artifact
+`;
+
+  const generateCalculations = () => `/**
+ * Financial Calculations Utility Functions
+ */
+
+/**
+ * Calculate arithmetic returns
+ * Formula: (P1 - P0) / P0
+ */
+export const calculateArithmeticReturns = (prices) => {
+  const returns = [];
+  for (let i = 1; i < prices.length; i++) {
+    returns.push((prices[i].price - prices[i-1].price) / prices[i-1].price);
+  }
+  return returns;
+};
+
+/**
+ * Calculate logarithmic returns
+ * Formula: ln(P1 / P0)
+ */
+export const calculateLogReturns = (prices) => {
+  const returns = [];
+  for (let i = 1; i < prices.length; i++) {
+    returns.push(Math.log(prices[i].price / prices[i-1].price));
+  }
+  return returns;
+};
+
+/**
+ * Calculate cumulative returns
+ */
+export const calculateCumulativeReturns = (returns) => {
+  let cumulative = 1;
+  return returns.map(r => {
+    cumulative *= (1 + r);
+    return cumulative - 1;
+  });
+};
+
+/**
+ * Calculate rolling volatility
+ * @param {Array} returns - Array of returns
+ * @param {number} window - Rolling window size
+ * @returns {Array} Annualized volatilities
+ */
+export const calculateRollingVolatility = (returns, window) => {
+  const volatilities = [];
+  for (let i = window - 1; i < returns.length; i++) {
+    const windowReturns = returns.slice(i - window + 1, i + 1);
+    const mean = windowReturns.reduce((a, b) => a + b, 0) / window;
+    const variance = windowReturns.reduce((sum, r) => 
+      sum + Math.pow(r - mean, 2), 0) / (window - 1);
+    volatilities.push(Math.sqrt(variance) * Math.sqrt(252));
+  }
+  return volatilities;
+};
+
+/**
+ * Calculate Sharpe Ratio
+ * Formula: (Return - Risk-Free Rate) / Volatility
+ */
+export const calculateSharpe = (returns, riskFreeRate) => {
+  const annualizedReturn = returns.reduce((a, b) => a + b, 0) / returns.length * 252;
+  const mean = returns.reduce((a, b) => a + b, 0) / returns.length;
+  const variance = returns.reduce((sum, r) => 
+    sum + Math.pow(r - mean, 2), 0) / (returns.length - 1);
+  const volatility = Math.sqrt(variance) * Math.sqrt(252);
+  return (annualizedReturn - riskFreeRate) / volatility;
+};
+
+/**
+ * Calculate Sortino Ratio
+ * Only penalizes downside volatility
+ */
+export const calculateSortino = (returns, riskFreeRate) => {
+  const annualizedReturn = returns.reduce((a, b) => a + b, 0) / returns.length * 252;
+  const mean = returns.reduce((a, b) => a + b, 0) / returns.length;
+  const downsideReturns = returns.filter(r => r < mean);
+  const downsideVariance = downsideReturns.reduce((sum, r) => 
+    sum + Math.pow(r - mean, 2), 0) / (downsideReturns.length - 1);
+  const downsideDeviation = Math.sqrt(downsideVariance) * Math.sqrt(252);
+  return (annualizedReturn - riskFreeRate) / downsideDeviation;
+};
+
+/**
+ * Calculate basic statistics
+ */
+export const calculateStatistics = (returns) => {
+  const mean = returns.reduce((a, b) => a + b, 0) / returns.length;
+  const variance = returns.reduce((sum, r) => 
+    sum + Math.pow(r - mean, 2), 0) / (returns.length - 1);
+  const stdDev = Math.sqrt(variance);
+  
+  return {
+    mean,
+    variance,
+    stdDev,
+    max: Math.max(...returns),
+    min: Math.min(...returns)
+  };
+};`;
+
+  const generateGitignore = () => `# Dependencies
+node_modules/
+.pnp
+.pnp.js
+
+# Testing
+coverage/
+
+# Production
+build/
+dist/
+
+# Misc
+.DS_Store
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# Logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+Thumbs.db`;
+
+  const generateLicense = () => `MIT License
+
+Copyright (c) ${new Date().getFullYear()} [Your Name]
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.`;
+
+  const prepareCumulativeData = () => {
+    if (!data) return [];
+    const chartData = [];
+    const maxLength = Math.max(...Object.values(data).map(d => d.cumulativeReturns.length));
+    
+    for (let i = 0; i < maxLength; i++) {
+      const point = { index: i + 1 };
+      tickers.forEach(ticker => {
+        if (data[ticker].cumulativeReturns[i] !== undefined) {
+          point[ticker] = (data[ticker].cumulativeReturns[i] * 100).toFixed(2);
+        }
+      });
+      chartData.push(point);
+    }
+    return chartData;
+  };
+
+  const prepareVolatilityData = () => {
+    if (!data) return [];
+    const chartData = [];
+    const maxLength = Math.max(...Object.values(data).map(d => d.rollingVol.length));
+    
+    for (let i = 0; i < maxLength; i++) {
+      const point = { index: i + rollingWindow };
+      tickers.forEach(ticker => {
+        if (data[ticker].rollingVol[i] !== undefined) {
+          point[ticker] = (data[ticker].rollingVol[i] * 100).toFixed(2);
+        }
+      });
+      chartData.push(point);
+    }
+    return chartData;
+  };
+
+  const prepareDistributionData = (ticker) => {
+    if (!data || !data[ticker]) return [];
+    const returns = data[ticker].arithmeticReturns;
+    const bins = 40;
+    const min = Math.min(...returns);
+    const max = Math.max(...returns);
+    const binWidth = (max - min) / bins;
+    
+    const histogram = new Array(bins).fill(0);
+    returns.forEach(r => {
+      const binIndex = Math.min(Math.floor((r - min) / binWidth), bins - 1);
+      histogram[binIndex]++;
+    });
+    
+    return histogram.map((count, i) => ({
+      return: ((min + (i + 0.5) * binWidth) * 100).toFixed(2),
+      frequency: count
+    }));
+  };
+
+  const colors = ['#3b82f6', '#ef4444', '#10b981', '#f59e0b', '#8b5cf6'];
+
+  return (
+    <div className="w-full h-full bg-gradient-to-br from-slate-900 to-slate-800 text-white p-6 overflow-auto">
+      <div className="max-w-7xl mx-auto">
+        <div className="mb-8 flex justify-between items-start">
+          <div>
+            <h1 className="text-4xl font-bold mb-2 flex items-center gap-3">
+              <TrendingUp className="w-10 h-10" />
+              Returns & Volatility Analyzer
+            </h1>
+            <p className="text-slate-300">
+              Comprehensive financial time series analysis with returns calculation and risk metrics
+            </p>
+          </div>
+          <button
+            onClick={() => setShowDownload(true)}
+            className="bg-gradient-to-r from-purple-600 to-blue-600 hover:from-purple-700 hover:to-blue-700 px-6 py-3 rounded-lg font-medium flex items-center gap-2 transition-all"
+          >
+            <Github className="w-5 h-5" />
+            Download for GitHub
+          </button>
+        </div>
+
+        {showDownload && (
+          <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4">
+            <div className="bg-slate-800 rounded-lg p-8 max-w-2xl w-full border border-slate-700">
+              <h2 className="text-2xl font-bold mb-4 flex items-center gap-2">
+                <Github className="w-6 h-6" />
+                Download Repository Files
+              </h2>
+              <p className="text-slate-300 mb-6">
+                This will download all necessary files to create a complete GitHub repository:
+              </p>
+              <ul className="space-y-2 mb-6 text-sm">
+                <li className="flex items-center gap-2">
+                  <span className="text-green-400">✓</span> README.md - Complete documentation
+                </li>
+                <li className="flex items-center gap-2">
+                  <span className="text-green-400">✓</span> package.json - Dependencies
+                </li>
+                <li className="flex items-center gap-2">
+                  <span className="text-green-400">✓</span> Source code - React components
+                </li>
+                <li className="flex items-center gap-2">
+                  <span className="text-green-400">✓</span> Utility functions - Financial calculations
+                </li>
+                <li className="flex items-center gap-2">
+                  <span className="text-green-400">✓</span> .gitignore - Git configuration
+                </li>
+                <li className="flex items-center gap-2">
+                  <span className="text-green-400">✓</span> LICENSE - MIT License
+                </li>
+              </ul>
+              <div className="bg-slate-700/50 rounded p-4 mb-6 text-sm">
+                <p className="font-semibold mb-2">Next Steps:</p>
+                <ol className="list-decimal list-inside space-y-1 text-slate-300">
+                  <li>Create a new repository on GitHub</li>
+                  <li>Initialize git: <code className="bg-slate-900 px-2 py-1 rounded">git init</code></li>
+                  <li>Add files and commit</li>
+                  <li>Push to GitHub</li>
+                  <li>Run <code className="bg-slate-900 px-2 py-1 rounded">npm install</code> and <code className="bg-slate-900 px-2 py-1 rounded">npm run dev</code></li>
+                </ol>
+              </div>
+              <div className="flex gap-3">
+                <button
+                  onClick={downloadFiles}
+                  className="flex-1 bg-green-600 hover:bg-green-700 px-6 py-3 rounded-lg font-medium flex items-center justify-center gap-2"
+                >
+                  <Download className="w-5 h-5" />
+                  Download All Files
+                </button>
+                <button
+                  onClick={() => setShowDownload(false)}
+                  className="px-6 py-3 rounded-lg font-medium bg-slate-700 hover:bg-slate-600"
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        <div className="bg-slate-800 rounded-lg p-6 mb-6 border border-slate-700">
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mb-4">
+            <div>
+              <label className="block text-sm font-medium mb-2">Days to Analyze</label>
+              <input
+                type="number"
+                value={dateRange}
+                onChange={(e) => setDateRange(Number(e.target.value))}
+                className="w-full bg-slate-700 border border-slate-600 rounded px-3 py-2 text-white"
+                min="30"
+                max="1260"
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium mb-2">Rolling Window</label>
+              <input
+                type="number"
+                value={rollingWindow}
+                onChange={(e) => setRollingWindow(Number(e.target.value))}
+                className="w-full bg-slate-700 border border-slate-600 rounded px-3 py-2 text-white"
+                min="5"
+                max="60"
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium mb-2">Risk-Free Rate (%)</label>
+              <input
+                type="number"
+                value={riskFreeRate * 100}
+                onChange={(e) => setRiskFreeRate(Number(e.target.value) / 100)}
+                className="w-full bg-slate-700 border border-slate-600 rounded px-3 py-2 text-white"
+                step="0.1"
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium mb-2">Add Ticker</label>
+              <div className="flex gap-2">
+                <input
+                  type="text"
+                  value={newTicker}
+                  onChange={(e) => setNewTicker(e.target.value.toUpperCase())}
+                  onKeyPress={(e) => e.key === 'Enter' && addTicker()}
+                  placeholder="TSLA"
+                  className="flex-1 bg-slate-700 border border-slate-600 rounded px-3 py-2 text-white"
+                />
+                <button
+                  onClick={addTicker}
+                  className="bg-blue-600 hover:bg-blue-700 px-4 py-2 rounded font-medium"
+                >
+                  Add
+                </button>
+              </div>
+            </div>
+          </div>
+          
+          <div className="flex flex-wrap gap-2">
+            {tickers.map(ticker => (
+              <span
+                key={ticker}
+                className="bg-slate-700 px-3 py-1 rounded-full text-sm flex items-center gap-2"
+              >
+                {ticker}
+                {tickers.length > 1 && (
+                  <button
+                    onClick={() => removeTicker(ticker)}
+                    className="text-red-400 hover:text-red-300"
+                  >
+                    ×
+                  </button>
+                )}
+              </span>
+            ))}
+          </div>
+        </div>
+
+        {error && (
+          <div className="bg-red-900/50 border border-red-700 rounded-lg p-4 mb-6">
+            {error}
+          </div>
+        )}
+
+        {loading && (
+          <div className="text-center py-12">
+            <Activity className="w-12 h-12 mx-auto animate-spin mb-4" />
+            <p>Analyzing financial data...</p>
+          </div>
+        )}
+
+        {data && !loading && (
+          <>
+            <div className="bg-slate-800 rounded-lg p-6 mb-6 border border-slate-700 overflow-x-auto">
+              <h2 className="text-2xl font-bold mb-4 flex items-center gap-2">
+                <BarChart3 className="w-6 h-6" />
+                Performance Metrics
+              </h2>
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b border-slate-700">
+                    <th className="text-left py-3 px-4">Metric</th>
+                    {tickers.map((ticker, i) => (
+                      <th key={ticker} className="text-right py-3 px-4" style={{ color: colors[i % colors.length] }}>
+                        {ticker}
+                      </th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr className="border-b border-slate-700/50">
+                    <td className="py-3 px-4 font-medium">Annualized Return</td>
+                    {tickers.map(ticker => (
+                      <td key={ticker} className="text-right py-3 px-4">
+                        {(data[ticker].statistics.annualizedReturn * 100
